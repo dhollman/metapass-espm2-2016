@@ -42,6 +42,9 @@
 			width: 960,
 			height: 700,
 
+            minTop: 0,
+
+
 			// Factor of the display size that should remain empty around the content
 			margin: 0.1,
 
@@ -1597,12 +1600,18 @@
 			dom.slides.style.width = size.width + 'px';
 			dom.slides.style.height = size.height + 'px';
 
+			var minTop = config.minTop;
+			if( typeof config.minTop === 'string' && /%$/.test( config.minTop ) ) {
+				minTop = parseInt( config.minTop, 10 ) / 100 * size.presentationHeight;
+			}
+
 			// Determine scale of content to fit within available space
-			scale = Math.min( size.presentationWidth / size.width, size.presentationHeight / size.height );
+			scale = Math.min( size.presentationWidth / size.width, (size.presentationHeight-minTop) / size.height );
 
 			// Respect max/min scale settings
 			scale = Math.max( scale, config.minScale );
 			scale = Math.min( scale, config.maxScale );
+
 
 			// Don't apply any scaling styles if scale is 1
 			if( scale === 1 ) {
@@ -1654,7 +1663,7 @@
 						slide.style.top = 0;
 					}
 					else {
-						slide.style.top = Math.max( ( ( size.height - getAbsoluteHeight( slide ) ) / 2 ) - slidePadding, 0 ) + 'px';
+						slide.style.top = Math.max( ( ( size.height - getAbsoluteHeight( slide ) ) / 2 ) - slidePadding, minTop ) + 'px';
 					}
 				}
 				else {
