@@ -6,7 +6,7 @@
  */
 @import url(../../lib/font/source-sans-pro/source-sans-pro.css);
 .backgrounds > .title-slide {
-  background: url(../../sandia-look/logos/SNL_Stacked_White.png) 83% 7%/calc(16% - 6px) auto no-repeat content-box fixed, url(../../sandia-look/logos/New_DOE_Logo_Color.png) 2% 90%/10% auto no-repeat content-box fixed, url(../../sandia-look/logos/NNSA_Logo_Color.png) 14% 90%/10% auto no-repeat content-box fixed, url(../../sandia-look/logos/exceptional1.png) 23% 9%/53% auto no-repeat content-box fixed, linear-gradient(to bottom, #022548 0%, #022548 20%, transparent calc(20% + 0.001px), transparent 92%, #6E1726 calc(92% + 0.001px), #6E1726 93%, transparent calc(93% + 0.001px), transparent 94%, #6F655C calc(94% + 0.001px), #6F655C 100%), url(../../sandia-look/gallery/title-pics.png) center 26.2%/100% auto no-repeat content-box fixed; }
+  background: url(../../sandia-look/logos/SNL_Stacked_White.png) 83% 7%/calc(16% - 6px) auto no-repeat content-box fixed, url(../../sandia-look/logos/New_DOE_Logo_Color.png) 2% 90%/10% auto no-repeat content-box fixed, url(../../sandia-look/logos/NNSA_Logo_Color.png) 14% 90%/10% auto no-repeat content-box fixed, url(../../sandia-look/logos/exceptional1.png) 23% 9%/53% auto no-repeat content-box fixed, linear-gradient(to bottom, #022548 0%, #022548 20%, transparent calc(20% + 0.001px), transparent 92%, #6E1726 calc(92% + 0.001px), #6E1726 93%, transparent calc(93% + 0.001px), transparent 94%, #6F655C calc(94% + 0.001px), #6F655C 100%), url(../../sandia-look/gallery/title-pics.jpg) center 26.2%/100% auto no-repeat content-box fixed; }
 
 .backgrounds > .title-slide::after {
   position: fixed;
