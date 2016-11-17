@@ -1330,16 +1330,26 @@ void finalize() {                                                               
       + "using namespace mpass;\n"
       + "using namespace std;\n";
 
+      var forceRedraw = function(element){
+
+        if (!element) { return; }
+
+        var n = document.createTextNode(' ');
+        var disp = element.style.display;  // don't worry about previous display style
+
+        element.appendChild(n);
+        element.style.display = 'none';
+
+        setTimeout(function(){
+          element.style.display = disp;
+          n.parentNode.removeChild(n);
+        }, 20); // you can play with this timeout to make it as short as possible
+      }
 
       function doCompile() {
         var outblock = getOutputBlock().childNodes[0];
-        outblock.style.display = 'none';
-        outblock.textContent = "Compiling...";
-        var trick = outblock.offsetHeight;
-        getOutputBlock().childNodes[0].style.display = 'block';
+        outblock.textContent = "Compiling...\n";
         var compileButton = getVisibleSlide().getElementsByClassName("compile-button")[0];
-        compileButton.style.display = 'none'
-        compileButton.style.display = 'block'
         compileButton.style['background-color'] = 'rgba(255,255,255, 0.8)';
         var codelist = getCompileCodeList();
         var code = "";
@@ -1351,14 +1361,16 @@ void finalize() {                                                               
         }
         if(DEBUG) { console.log("Compiling...", code_prefix + code); }
         var http = new XMLHttpRequest();
-        http.open("POST", "http://coliru.stacked-crooked.com/compile", false);
+        http.onreadystatechange = function() {
+          if(http.readyState == 4) {
+            outblock.textContent = http.response;
+            setupButtonStyle(compileButton, compileButtonPosition);
+          }
+        };
+        http.open("POST", "http://coliru.stacked-crooked.com/compile", true);
         http.send(JSON.stringify({ "cmd": "clang++ -pthread -std=c++14 main.cpp && ./a.out", 
           "src": code_prefix + code }
         ));
-        getOutputBlock().childNodes[0].textContent = http.response;
-        setupButtonStyle(compileButton, compileButtonPosition);
-        compileButton.style.display = 'none'
-        compileButton.style.display = 'block'
       }
 
       function replaceWithCode() {
