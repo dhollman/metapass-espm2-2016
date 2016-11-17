@@ -410,7 +410,18 @@ int main() {
         <section>
           <section data-markdown data-title="Concluding Remarks">
             <script type="text/template">
-TODO Write this slide after we've talked through big picture stuff
+* Harnessing the power of exascale architectures will require careful use of a variety off
+  implicit and explicit representations of parallelism and concurrency.
+* The best programming model(s) for a given use case will vary depending on a number of factors,
+  including:
+  + Task granularity
+  + Developer productivity requirements
+  + Scalability requirements
+  + Performance portability needs
+  + Model safety needs
+* Sequential semantics are one such model that addresses many use cases
+  + ...and can be embedded *directly* in C++ with a little bit of metaprogramming
+    (and no compiler modifications!).
             </script>
           </section>
         </section>
