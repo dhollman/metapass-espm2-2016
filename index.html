@@ -1,0 +1,1487 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+    <title>Metaprogramming-Enabled Parallel Execution of Apparently Sequential C++ Code</title>
+
+    <link rel="stylesheet" href="css/reveal.css">
+    <link rel="stylesheet" href="css/theme/sandia.css">
+
+    <!-- Theme used for syntax highlighting of code -->
+    <link rel="stylesheet" href="lib/css/zenburn.css">
+
+    <!-- Printing and PDF exports -->
+    <script>
+      var link = document.createElement( 'link' );
+      link.rel = 'stylesheet';
+      link.type = 'text/css';
+      link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+      document.getElementsByTagName( 'head' )[0].appendChild( link );
+    </script>
+  </head>
+  <body>
+    <div class="reveal">
+      <div class="slides">
+        <!-- ################################################################################ -->
+        <!-- {{{1 title slide -->
+        <section class="title-slide">
+            <br>
+            <br>
+            <br>
+            <br>
+            <br>
+            <br>
+            Metaprogramming-Enabled Parallel Execution of Apparently Sequential C++ Code
+            <small>
+            <br><u>David S. Hollman</u>, Janine C. Bennett, Hemanth Kolla, Jonathan Lifflander
+            Jeremiah J. Wilke, Nicole Slattengren
+            </small>
+        </section>
+        <!-- }}}1 end title slide -->
+        <!-- ################################################################################ -->
+        <!-- {{{1 What are sequential semantics? -->
+        <section>
+          <section data-markdown
+            data-state="compile-code" data-title="What are sequential semantics?"> 
+            <script type="text/template">
+Consider the following serial code:
+
+```c++
+void get_foo(int& val) { /* some work... */ val = 42; }
+void get_bar(int& val) { /*...*/ val = 73; }
+void print(int a, int b) {
+  cout << a << ", " << b << endl;
+}
+
+int main() {
+  int foo, bar;
+  get_foo(foo);
+  get_bar(bar);
+  print(foo, bar);
+}
+```
+<!-- .element: class="compile-cpp-code" -->
+
+Output:
+
+```
+
+```
+<!-- .element: class="code-output-block" style="max-height: 100px;" -->
+            </script>
+          </section>
+          <section data-markdown
+            data-state="compile-code" data-title="What are sequential semantics?"> 
+            <script type="text/template">
+Using explicit threads:
+
+```c++
+static int foo, bar;
+void get_foo() { /* some work... */ foo = 42; }
+void get_bar() { /*...*/ bar = 73; }
+void print() {
+  cout << foo << ", " << bar << endl;
+}
+
+int main() {
+  auto thr_foo = thread(get_foo);
+  auto thr_bar = thread(get_bar);
+  thr_foo.join();
+  thr_bar.join();
+  print();
+}
+```
+<!-- .element: class="compile-cpp-code" -->
+
+Output:
+
+```
+
+```
+<!-- .element: class="code-output-block" style="max-height: 100px;" -->
+            </script>
+          </section>
+          <section data-markdown
+            data-state="compile-code" data-title="What are sequential semantics?"> 
+            <script type="text/template">
+Using `async`-`future` semantics:
+
+```c++
+int get_foo() { /* some work... */ return 42; }
+int get_bar() { /* ... */ return 73; }
+void print(future<int> a, future<int> b) {
+  cout << a.get() << ", " << b.get() << endl;
+}
+
+int main() {
+  future<int> foo = std::async(get_foo);
+  future<int> bar = std::async(get_bar);
+  future<void> print_done = std::async(print, move(foo), move(bar));
+  print_done.wait();
+}
+```
+<!-- .element: class="compile-cpp-code" -->
+
+Output:
+
+```
+
+```
+<!-- .element: class="code-output-block" style="max-height: 100px;" -->
+            </script>
+          </section>
+          <section data-markdown
+            data-state="compile-code" data-title="What are sequential semantics?"> 
+            <script type="text/template">
+Using sequential semantics:
+
+```c++
+void get_foo(int& val) { /* some work... */ val = 42; }
+void get_bar(int& val) { /*...*/ val = 73; }
+void print(int a, int b) {
+  cout << a << ", " << b << endl;
+}
+
+int main() {
+  async_ptr<int> foo, bar;
+  mpass::async(get_foo, foo);
+  mpass::async(get_bar, bar);
+  mpass::async(print, foo, bar);
+}
+```
+<!-- .element: class="compile-cpp-code" -->
+
+Output:
+
+```
+
+```
+<!-- .element: class="code-output-block" style="max-height: 100px;" -->
+            </script>
+          </section>
+        </section>
+        <!-- }}}1 end of What are sequential semantics? -->
+        <!-- ################################################################################ -->
+        <!-- {{{1 How do async_ptr and async work? -->
+        <section>
+          <section data-markdown data-title="How do <code>async_ptr</code> and <code>async</code> work?">
+            <script type="text/template">
+A minimal user interface to `async_ptr`:
+
+```c++
+namespace mpass {
+  template <typename T>
+  class async_ptr { };
+}
+```
+
+and `async()`:
+
+```c++
+namespace mpass {
+  template <typename Function, typename... Args>
+  void async(Function&& f, Args&&... args);
+}
+```
+
+* All the heavy lifting is done by `async()` (and the backend runtime)
+* There is no underlying data in `async_ptr` to "accidentally" access
+            </script>
+          </section>
+          <section data-markdown data-title="How do <code>async_ptr</code> and <code>async</code> work?">
+            <script type="text/template">
+**What does `async()` do?**
+
+* `async()` detect dependencies of the task given to it and how they are used (i.e., read or modify).
+* A backend task scheduler and runtime layer is needed to execute the directed acyclic graph (DAG) of dependencies
+  generated by apparently sequential `async()` invocations.
+  - ...but this "separation of concerns" is a good thing!
+            </script>
+          </section>
+          <section data-markdown 
+            data-state="compile-code" data-title="How do <code>async_ptr</code> and <code>async</code> work?">
+            <script type="text/template">
+How does `async()` know how a tasks' dependencies are used?
+
+*It looks at the function parameters!*
+
+```c++
+void f1(int& value); // this function modifies its argument
+void f2(int const& value); // this function reads its argument in place
+void f3(int value); // this function reads a copy of its argument
+
+int main() {
+  cout << "f1() takes a non-const reference: " << std::boolalpha
+       << mpass::callable_traits<decltype(f1)>
+               ::template arg_n_is_nonconst_lvalue_reference<0>::value
+       << std::endl;
+  // also try arg_n_is_by_value and arg_n_is_const_reference
+}
+```
+<!-- .element: class="compile-cpp-code" -->
+
+Output:
+
+```bash
+f1() takes a non-const reference: true
+```
+<!-- .element: class="code-output-block" style="max-height: 100px;" -->
+            </script>
+          </section>
+          <section data-markdown 
+            data-state="compile-code" data-title="How do <code>async_ptr</code> and <code>async</code> work?">
+            <script type="text/template">
+We can arbitrarily mix dependencies and arguments:
+
+```c++
+void nth_root(double& result, double value, double root) {
+  result = std::pow(value, 1.0/root);
+}
+void print(double v1, double v2, double v3) { 
+  cout << setprecision(2) << fixed << v1 << " " << v2 << " " << v3 << endl; 
+}
+int main() {
+  async_ptr<double> a, b, c;
+  double thirty = 30.0;
+  mpass::async(nth_root, a, thirty, 3.14);
+  mpass::async(nth_root, b, 256, a);
+  // async(nth_root, thirty, a, b); compile error!
+  mpass::async(nth_root, c, a, b);
+  mpass::async(print, a, b, c);
+}
+```
+<!-- .element: class="compile-cpp-code" -->
+
+Output:
+
+```bash
+2.95 6.53 1.18
+```
+<!-- .element: class="code-output-block" style="max-height: 80px;" -->
+            </script>
+          </section>
+        </section>
+        <!-- }}}1 end of What are sequential semantics? -->
+        <!-- ################################################################################ -->
+        <!-- {{{1 Safety guarantees -->
+        <section>
+          <section data-markdown
+            data-state="compile-code" data-title="Safety guarantees"> 
+            <script type="text/template">
+* In the simplest case, the *only* way to dereference an `async_ptr` is to create a task that acts on it
+* Thus, it is acutally *impossible* for the user to create a data race or deadlock within this model if
+  they only access data through `async_ptr` and function arguments
+
+```c++
+void foo(int& val) { val = (val+1) * 2; }
+void bar(int const& val) { cout << val << " "; }
+int main() {
+  async_ptr<int> p;  // (calls default ctor of underlying data when needed)
+  mpass::async(foo, p); // modifies underlying data
+  mpass::async(bar, p); // can't run until foo() finishes writing
+  mpass::async(foo, p); // can't run until bar() finishes reading
+  mpass::async(bar, p); // can't run until second foo() finishes writing
+}
+```
+<!-- .element: class="compile-cpp-code" -->
+
+Output:
+
+```
+2 6 
+```
+<!-- .element: class="code-output-block" style="max-height: 100px;" -->
+            </script>
+          </section>
+        </section>
+        <!-- }}}1 end of Safety guarantees -->
+        <!-- ################################################################################ -->
+        <!-- {{{1 Extension to Distributed Environments -->
+        <section>
+          <section data-markdown data-title="Extension to Distributed Environments">
+            <script type="text/template">
+####There are several options for using sequential semantics with distributed computing:
+
+* Use it "as is" and hope we create enough tasks to saturate the machine
+  - Could work okay for problems that generate lots of independent work
+  - Essentially equivalent to manager-worker style distributed parallelism
+  - The backend implementation is responsible for distributing the tasks across execution resources
+  - Not very scalable if tasks do any communication (tasks have to communicate through their parents)
+            </script>
+          </section>
+          <section data-markdown data-title="Extension to Distributed Environments" data-state="compile-code">
+            <script type="text/template">
+"As is" example:
+
+```c++
+void do_work(int& result, int value) { result = value * value; }
+void accumulate(int& result, int value) { result += value; }
+void print(int val) { cout << val << endl; }
+int main() {
+  async_ptr<int> total;
+  for(int i = 0; i < 100; ++i) {
+    async_ptr<int> contribution;
+    // Could be scheduled on any machine in the network
+    mpass::async(do_work, contribution, i);
+    // (an extended semantic would be able to put total in a "commutative"
+    // mode, but we've left that off for simplicity here)
+    mpass::async(accumulate, total, contribution);
+  }
+  mpass::async(print, total);
+}
+```
+<!-- .element: class="compile-cpp-code" -->
+
+```
+328350
+```
+<!-- .element: class="code-output-block" style="max-height: 100px;" -->
+            </script>
+          </section>
+          <section data-markdown data-title="Extension to Distributed Environments">
+            <script type="text/template">
+* Use it with an existing communication layer (e.g., MPI) and an SPMD launch
+  - Much more scalable in the non-trivial case
+  - Alleviates single parent bottleneck
+  - Dynamic load balancing no longer "free"
+  - Also loses a lot of the safety guarantees from the simpler model
+  - Programming model usually logically tied to a single decomposition of the problem (i.e., across
+    MPI ranks)
+            </script>
+          </section>
+          <section data-markdown data-title="Extension to Distributed Environments">
+            <script type="text/template">
+MPI Example:
+
+```c++
+void do_work(int& result, int value) { result = value * value; }
+void accumulate(int& result, int value) { result += value; }
+void do_reduce(int& value) {
+  int result = 0;
+  MPI_Reduce(&value, &result, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+  value = result;
+}
+void print(int val) { cout << val << endl; }
+int main() {
+  int rank, size;
+  MPI_Comm_rank(rank);
+  MPI_Comm_size(size);
+  async_ptr<int> total;
+  int chunk = 100 / size;
+  for(int i = rank*chunk; i < (rank+1)*chunk; ++i) {
+    async_ptr<int> contribution;
+    mpass::async(do_work, contribution, i);
+    mpass::async(accumulate, total, contribution);
+  }
+  mpass::async(do_reduce, total);
+  if(rank == 0) mpass::async(print, total);
+}
+```
+            </script>
+          </section>
+          <section data-markdown data-title="Extension to Distributed Environments">
+            <script type="text/template">
+
+* Use an approach somewhere in between these two extremes.  Desirable properties include:
+  - Communication operations themselves are not dependent on sequence
+    + Requires something like tags or data labels for data being moved
+  - Should not have single node bottleneck
+    + ...but also should not be tied to a single decomposition of work
+  - Maintain safety guarantees wherever possible, make it abundantly clear when constructs or
+    abstractions break these safety guarantees.
+  - Should be possible for backend to do dynamic load balancing
+    + Implies, at minimum, some sort of virtualization of "rank-like" concept
+
+            </script>
+          </section>
+        </section>
+        <!-- }}}1 end of Extension to distributed environments -->
+        <!-- ################################################################################ -->
+        <!-- {{{1 Concluding remarks -->
+        <section>
+          <section data-markdown data-title="Concluding Remarks">
+            <script type="text/template">
+TODO Write this slide after we've talked through big picture stuff
+            </script>
+          </section>
+        </section>
+        <!-- }}}1 end of Concluding remarks -->
+        <!-- ################################################################################ -->
+        <!-- {{{1 Questions? -->
+        <section>
+          <section data-markdown>
+            <script type="text/template">
+#Questions?
+#Comments?
+#Discussions?
+
+#### Thanks for attending!
+            </script>
+          </section>
+        </section>
+        <!-- }}}1 end of Questions -->
+        <!-- ################################################################################ -->
+      </div>
+    </div>
+
+    <script src="lib/js/head.min.js"></script>
+    <script src="js/reveal.js"></script>
+
+    <script>
+// {{{1 Code to include
+//##############################################################################
+//##############################################################################
+//##############################################################################
+//##############################################################################
+      var detection_header = ' \
+#include <type_traits>                                                                                                       \n\
+#include <list>                                                                                                              \n\
+#include <map>                                                                                                               \n\
+#include <set>                                                                                                               \n\
+#include <sstream>                                                                                                           \n\
+#include <fstream>                                                                                                           \n\
+#include <cassert>                                                                                                           \n\
+#include <iostream>                                                                                                          \n\
+#include <iomanip>                                                                                                          \n\
+#include <utility>                                                                                                           \n\
+#include <vector>                                                                                                            \n\
+#include <map>                                                                                                               \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+#define MAX_CALLABLE_ARGS 256                                                                                                \n\
+namespace mpass {                                                                                                            \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+// <editor-fold desc="some very simple metafunctions">                                                                       \n\
+                                                                                                                             \n\
+template <typename T>                                                                                                        \n\
+struct identity { using type = T; };                                                                                         \n\
+                                                                                                                             \n\
+template <typename... Args>                                                                                                  \n\
+struct logical_and;                                                                                                          \n\
+                                                                                                                             \n\
+template <typename T, typename... Args>                                                                                      \n\
+struct logical_and<T, Args...>                                                                                               \n\
+  : std::conditional_t<                                                                                                      \n\
+      T::value,                                                                                                              \n\
+      logical_and<Args...>,                                                                                                  \n\
+      identity<std::false_type>                                                                                              \n\
+    >::type                                                                                                                  \n\
+{ };                                                                                                                         \n\
+                                                                                                                             \n\
+template <>                                                                                                                  \n\
+struct logical_and<> : std::true_type { };                                                                                   \n\
+                                                                                                                             \n\
+template <typename... Args>                                                                                                  \n\
+struct logical_or;                                                                                                           \n\
+                                                                                                                             \n\
+template <typename T, typename... Args>                                                                                      \n\
+struct logical_or<T, Args...>                                                                                                \n\
+  : std::conditional_t<                                                                                                      \n\
+    T::value,                                                                                                                \n\
+    identity<std::true_type>,                                                                                                \n\
+    logical_or<Args...>                                                                                                      \n\
+  >::type                                                                                                                    \n\
+{ };                                                                                                                         \n\
+                                                                                                                             \n\
+template <>                                                                                                                  \n\
+struct logical_or<> : std::false_type { };                                                                                   \n\
+                                                                                                                             \n\
+template <typename T>                                                                                                        \n\
+struct not_ : std::integral_constant<bool, not T::value> { };                                                                \n\
+                                                                                                                             \n\
+// </editor-fold>                                                                                                            \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+// <editor-fold desc="void_t detection">                                                                                     \n\
+                                                                                                                             \n\
+// A void_t implementation that works with gcc-4.9 (workaround for bug 64395                                                 \n\
+// From: http://stackoverflow.com/questions/35753920/why-does-the-void-t-detection-idiom-not-work-with-gcc-4-9               \n\
+namespace _void_t_impl {                                                                                                     \n\
+                                                                                                                             \n\
+template <class... >                                                                                                         \n\
+struct make_void { using type = void; };                                                                                     \n\
+                                                                                                                             \n\
+} // end namepace _void_t_impl                                                                                               \n\
+                                                                                                                             \n\
+template <class... T>                                                                                                        \n\
+using void_t = typename _void_t_impl::make_void<T...>::type;                                                                 \n\
+                                                                                                                             \n\
+// Large pieces taken or adapted from http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2015/n4436.pdf                      \n\
+                                                                                                                             \n\
+// primary template handles all types not supporting the archetypal Op                                                       \n\
+template <                                                                                                                   \n\
+  class Default,                                                                                                             \n\
+  class _always_void,                                                                                                        \n\
+  template <class...> class Op,                                                                                              \n\
+  class... Args                                                                                                              \n\
+>                                                                                                                            \n\
+struct detector {                                                                                                            \n\
+  constexpr static auto value = false;                                                                                       \n\
+  using type = Default;                                                                                                      \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+// specialization recognizes and handles only types supporting Op                                                            \n\
+template <                                                                                                                   \n\
+  class Default,                                                                                                             \n\
+  template <class...> class Op,                                                                                              \n\
+  class... Args                                                                                                              \n\
+>                                                                                                                            \n\
+struct detector<Default, void_t<Op<Args...>>, Op, Args...> {                                                                 \n\
+  constexpr static auto value = true;                                                                                        \n\
+  using type = Op<Args...>;                                                                                                  \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+struct nonesuch {                                                                                                            \n\
+  nonesuch() = delete;                                                                                                       \n\
+  ~nonesuch() = delete;                                                                                                      \n\
+  nonesuch(nonesuch const&) = delete;                                                                                        \n\
+  void operator=(nonesuch const&) = delete;                                                                                  \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+template <template <class...> class Op, class... Args>                                                                       \n\
+using is_detected = detector<nonesuch, void, Op, Args...>;                                                                   \n\
+                                                                                                                             \n\
+template <template <class...> class Op, class... Args>                                                                       \n\
+using detected_t = typename is_detected<Op, Args...>::type;                                                                  \n\
+                                                                                                                             \n\
+template <class Default, template <class...> class Op, class... Args>                                                        \n\
+using detected_or = detector<Default, void, Op, Args...>;                                                                    \n\
+                                                                                                                             \n\
+template <class Default, template <class...> class Op, class... Args>                                                        \n\
+using detected_or_t = typename detected_or<Default, Op, Args...>::type;                                                      \n\
+                                                                                                                             \n\
+template <class Expected, template<class...> class Op, class... Args>                                                        \n\
+using is_detected_exact = std::is_same<Expected, detected_t<Op, Args...>>;                                                   \n\
+                                                                                                                             \n\
+template <class To, template <class...> class Op, class... Args>                                                             \n\
+using is_detected_convertible = std::is_convertible<detected_t<Op, Args...>, To>;                                            \n\
+                                                                                                                             \n\
+// </editor-fold>                                                                                                            \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+// <editor-fold desc="is_callable_with_args">                                                                                \n\
+                                                                                                                             \n\
+template <typename F, typename... Args>                                                                                      \n\
+using callable_with_args_archetype = decltype(                                                                               \n\
+std::declval<std::add_lvalue_reference_t<F>>()( std::declval<Args>()... )                                                    \n\
+);                                                                                                                           \n\
+template <typename F, typename... Args>                                                                                      \n\
+using is_callable_with_args =                                                                                                \n\
+is_detected<callable_with_args_archetype, F, Args...>;                                                                       \n\
+                                                                                                                             \n\
+// </editor-fold>                                                                                                            \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+// <editor-fold desc="any_arg variants">                                                                                     \n\
+                                                                                                                             \n\
+// Much credit is owed to help from:                                                                                         \n\
+//   http://stackoverflow.com/questions/36581303/counting-arguments-of-an-arbitrary-callable-with-the-c-detection-idiom      \n\
+// for this solution                                                                                                         \n\
+                                                                                                                             \n\
+struct any_arg {                                                                                                             \n\
+  template <typename T>                                                                                                      \n\
+  operator T();                                                                                                              \n\
+  template <typename T>                                                                                                      \n\
+  operator T&() const;                                                                                                       \n\
+  template <typename T>                                                                                                      \n\
+  operator T&&() const;                                                                                                      \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+struct ambiguous_if_by_value {                                                                                               \n\
+  template <typename T>                                                                                                      \n\
+  operator T();                                                                                                              \n\
+  template <typename T>                                                                                                      \n\
+  operator T&();                                                                                                             \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+// Note that by value arguments (e.g., j in void foo(int j);) can be deduced from this                                       \n\
+// in clang, but cannot be deduced from this in gcc, so be super careful with this                                           \n\
+// (this is a known bug in gcc)                                                                                              \n\
+struct any_const_reference {                                                                                                 \n\
+  template <typename T>                                                                                                      \n\
+  operator const T&() const;                                                                                                 \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+template <                                                                                                                   \n\
+  template <class...> class UnaryMetafunction                                                                                \n\
+>                                                                                                                            \n\
+struct any_arg_conditional {                                                                                                 \n\
+  template <typename T,                                                                                                      \n\
+    typename = std::enable_if_t<UnaryMetafunction<T>::value>                                                                 \n\
+  >                                                                                                                          \n\
+  operator T();                                                                                                              \n\
+                                                                                                                             \n\
+  template <typename T,                                                                                                      \n\
+    typename = std::enable_if_t<UnaryMetafunction<T&>::value>                                                                \n\
+  >                                                                                                                          \n\
+  operator T&() const;                                                                                                       \n\
+                                                                                                                             \n\
+  template <typename T,                                                                                                      \n\
+    typename = std::enable_if_t<UnaryMetafunction<T&&>::value>                                                               \n\
+  >                                                                                                                          \n\
+  operator T&&() const;                                                                                                      \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+// Compiler bug workaround:                                                                                                  \n\
+namespace _impl {                                                                                                            \n\
+                                                                                                                             \n\
+struct maybe_ambiguous_for_rvalue {                                                                                          \n\
+  template <typename T>                                                                                                      \n\
+  operator T();                                                                                                              \n\
+  template <typename T>                                                                                                      \n\
+  operator T&&();                                                                                                            \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+void _darma__unimplemented_test(int&&);                                                                                      \n\
+                                                                                                                             \n\
+using rvalue_ref_operator_needs_const_t = std::integral_constant<bool, not                                                   \n\
+  is_callable_with_args<                                                                                                     \n\
+    decltype(_darma__unimplemented_test),                                                                                    \n\
+    maybe_ambiguous_for_rvalue                                                                                               \n\
+  >::value                                                                                                                   \n\
+>;                                                                                                                           \n\
+                                                                                                                             \n\
+} // end namespace _impl                                                                                                     \n\
+                                                                                                                             \n\
+struct any_nonconst_rvalue_reference {                                                                                       \n\
+  template <typename T>                                                                                                      \n\
+  operator T();                                                                                                              \n\
+                                                                                                                             \n\
+  template <typename T,                                                                                                      \n\
+    typename=std::enable_if_t<                                                                                               \n\
+      not std::is_const<std::remove_reference_t<T>>::value                                                                   \n\
+        and _impl::rvalue_ref_operator_needs_const_t::value                                                                  \n\
+    >                                                                                                                        \n\
+  >                                                                                                                          \n\
+  operator const T&&();                                                                                                      \n\
+                                                                                                                             \n\
+  template <typename T,                                                                                                      \n\
+    typename=std::enable_if_t<                                                                                               \n\
+      not std::is_const<std::remove_reference_t<T>>::value                                                                   \n\
+        and not _impl::rvalue_ref_operator_needs_const_t::value                                                              \n\
+    >                                                                                                                        \n\
+  >                                                                                                                          \n\
+  operator T&&();                                                                                                            \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+// </editor-fold>                                                                                                            \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+// <editor-fold desc="count_min_args">                                                                                       \n\
+                                                                                                                             \n\
+template <typename F, size_t I = 0,  typename... Args>                                                                       \n\
+struct count_min_args                                                                                                        \n\
+  // Double "::type" short-circuits recursion when possible                                                                  \n\
+  : std::conditional_t<                                                                                                      \n\
+      is_callable_with_args<F, Args...>::value,                                                                              \n\
+      std::integral_constant<size_t, I>,                                                                                     \n\
+      count_min_args<F, I+1, Args..., any_arg>                                                                               \n\
+    >::type                                                                                                                  \n\
+{ };                                                                                                                         \n\
+                                                                                                                             \n\
+template <typename F, typename... Args>                                                                                      \n\
+struct count_min_args<F, MAX_CALLABLE_ARGS, Args...>                                                                         \n\
+  : std::integral_constant<size_t, MAX_CALLABLE_ARGS+1> { };                                                                 \n\
+                                                                                                                             \n\
+// </editor-fold>                                                                                                            \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+// <editor-fold desc="count_max_args">                                                                                       \n\
+                                                                                                                             \n\
+template <typename F, size_t I = 0, bool min_found = false, typename... Args>                                                \n\
+struct count_max_args                                                                                                        \n\
+  : std::conditional_t<                                                                                                      \n\
+      is_callable_with_args<F, Args...>::value,                                                                              \n\
+      count_max_args<F, I+1, true, Args..., any_arg>,                                                                        \n\
+      std::conditional_t<                                                                                                    \n\
+        min_found,                                                                                                           \n\
+        std::integral_constant<size_t, I-1>,                                                                                 \n\
+        count_max_args<F, I+1, false, Args..., any_arg>                                                                      \n\
+      >                                                                                                                      \n\
+    >                                                                                                                        \n\
+{ };                                                                                                                         \n\
+                                                                                                                             \n\
+// Base case just returns max; error message elsewhere.                                                                      \n\
+template <typename F, bool min_found, typename... Args>                                                                      \n\
+struct count_max_args<F, MAX_CALLABLE_ARGS, min_found, Args...>                                                              \n\
+  : std::integral_constant<size_t, MAX_CALLABLE_ARGS+1> { };                                                                 \n\
+                                                                                                                             \n\
+// </editor-fold>                                                                                                            \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+// <editor-fold desc="is_callable_replace_arg_n">                                                                            \n\
+                                                                                                                             \n\
+template <typename F,                                                                                                        \n\
+  typename ArgNReplacement, typename OtherArgsType,                                                                          \n\
+  size_t N, size_t I, size_t NTotal,                                                                                         \n\
+  typename... Args                                                                                                           \n\
+>                                                                                                                            \n\
+struct is_callable_replace_arg_n                                                                                             \n\
+  : std::conditional_t<                                                                                                      \n\
+    N >= NTotal,                                                                                                             \n\
+    std::false_type,                                                                                                         \n\
+    is_callable_replace_arg_n<F,                                                                                             \n\
+      ArgNReplacement, OtherArgsType,                                                                                        \n\
+      N, I+1, NTotal, Args...,                                                                                               \n\
+      std::conditional_t< I == N, ArgNReplacement, OtherArgsType >                                                           \n\
+    >                                                                                                                        \n\
+  >                                                                                                                          \n\
+{ };                                                                                                                         \n\
+                                                                                                                             \n\
+template <typename F,                                                                                                        \n\
+  typename ArgNReplacement, typename OtherArgsType,                                                                          \n\
+  size_t N, size_t NTotal,                                                                                                   \n\
+  typename... Args                                                                                                           \n\
+>                                                                                                                            \n\
+struct is_callable_replace_arg_n<F,                                                                                          \n\
+  ArgNReplacement, OtherArgsType, N, NTotal, NTotal, Args...                                                                 \n\
+> : is_callable_with_args<F, Args...>                                                                                        \n\
+{ };                                                                                                                         \n\
+                                                                                                                             \n\
+// </editor-fold>                                                                                                            \n\
+////////////////////////////////////////////////////////////////////////////////                                             \n\
+                                                                                                                             \n\
+template <typename Callable>                                                                                                 \n\
+struct callable_traits                                                                                                       \n\
+{                                                                                                                            \n\
+  private:                                                                                                                   \n\
+                                                                                                                             \n\
+  public:                                                                                                                    \n\
+                                                                                                                             \n\
+    static constexpr auto n_args_min = count_min_args<Callable>::value;                                                      \n\
+    static constexpr auto n_args_max = count_max_args<Callable>::value;                                                      \n\
+                                                                                                                             \n\
+    static_assert(n_args_min == n_args_max,                                                                                  \n\
+      "Overloads and default arguments are not supported"                                                                    \n\
+    );                                                                                                                       \n\
+                                                                                                                             \n\
+    static constexpr auto n_args = n_args_min;                                                                               \n\
+                                                                                                                             \n\
+    template <size_t N>                                                                                                      \n\
+    struct arg_n_is_nonconst_rvalue_reference                                                                                \n\
+      : is_callable_replace_arg_n<Callable,                                                                                  \n\
+        any_nonconst_rvalue_reference,                                                                                       \n\
+        any_arg,                                                                                                             \n\
+        N, 0, n_args                                                                                                         \n\
+      >                                                                                                                      \n\
+    { };                                                                                                                     \n\
+                                                                                                                             \n\
+    template <size_t N>                                                                                                      \n\
+    struct arg_n_is_by_reference                                                                                             \n\
+      : is_callable_replace_arg_n<Callable,                                                                                  \n\
+          ambiguous_if_by_value,                                                                                             \n\
+          any_arg,                                                                                                           \n\
+          N, 0, n_args                                                                                                       \n\
+        >                                                                                                                    \n\
+    { };                                                                                                                     \n\
+                                                                                                                             \n\
+    template <size_t N>                                                                                                      \n\
+    struct arg_n_is_by_value                                                                                                 \n\
+      : std::integral_constant< bool, not arg_n_is_by_reference<N>::value >                                                  \n\
+    { };                                                                                                                     \n\
+                                                                                                                             \n\
+    template <size_t N>                                                                                                      \n\
+    struct arg_n_accepts_const_reference                                                                                     \n\
+      : logical_or<                                                                                                          \n\
+          is_callable_replace_arg_n<Callable,                                                                                \n\
+            any_const_reference,                                                                                             \n\
+            any_arg,                                                                                                         \n\
+            N, 0, n_args_max                                                                                                 \n\
+          >,                                                                                                                 \n\
+          arg_n_is_by_value<N>                                                                                               \n\
+        >::type                                                                                                              \n\
+    {                                                                                                                        \n\
+      static_assert(                                                                                                         \n\
+        N < n_args_max,                                                                                                      \n\
+        "N given to arg_accepts_const_reference is out of range for number of arguments to F"                                \n\
+      );                                                                                                                     \n\
+    };                                                                                                                       \n\
+                                                                                                                             \n\
+    template <size_t N>                                                                                                      \n\
+    struct arg_n_is_const_lvalue_reference                                                                                   \n\
+      : logical_and<                                                                                                         \n\
+          arg_n_accepts_const_reference<N>,                                                                                  \n\
+          not_<arg_n_is_by_value<N>>                                                                                         \n\
+        >::type                                                                                                              \n\
+    { };                                                                                                                     \n\
+                                                                                                                             \n\
+    template <size_t N>                                                                                                      \n\
+    struct arg_n_is_nonconst_lvalue_reference                                                                                \n\
+      : std::integral_constant<bool,                                                                                         \n\
+          arg_n_is_by_reference<N>::value                                                                                    \n\
+            and not arg_n_accepts_const_reference<N>::value                                                                  \n\
+            and not arg_n_is_nonconst_rvalue_reference<N>::value                                                             \n\
+        >                                                                                                                    \n\
+    { };                                                                                                                     \n\
+                                                                                                                             \n\
+    template <size_t N, typename U>                                                                                          \n\
+    struct arg_n_is_implicitly_convertible_from                                                                              \n\
+      : is_callable_replace_arg_n<Callable,                                                                                  \n\
+          U, any_arg, N, 0, n_args_max                                                                                       \n\
+        >                                                                                                                    \n\
+    { };                                                                                                                     \n\
+                                                                                                                             \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+void* get_dependency(size_t id);                                                                                             \n\
+                                                                                                                             \n\
+namespace detail {                                                                                                           \n\
+                                                                                                                             \n\
+// Forward decl                                                                                                              \n\
+struct TaskBase;                                                                                                             \n\
+                                                                                                                             \n\
+} // end namespace detail                                                                                                    \n\
+                                                                                                                             \n\
+template <class T=void>                                                                                                      \n\
+std::atomic<size_t>&                                                                                                         \n\
+ptr_id_counter(){                                                                                                            \n\
+  static std::atomic<size_t> ptr_id_counter_ {0} ;                                                                           \n\
+  return ptr_id_counter_;                                                                                                    \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+class async_ptr_base;                                                                                                        \n\
+extern std::map<size_t, async_ptr_base*> id_to_ptr;                                                                          \n\
+                                                                                                                             \n\
+class async_ptr_base {                                                                                                       \n\
+                                                                                                                             \n\
+  protected:                                                                                                                 \n\
+                                                                                                                             \n\
+    async_ptr_base(const char* theName) :                                                                                    \n\
+      id(ptr_id_counter()++),                                                                                                \n\
+      name(theName)                                                                                                          \n\
+    {                                                                                                                        \n\
+      id_to_ptr[id] = this;                                                                                                  \n\
+    }                                                                                                                        \n\
+                                                                                                                             \n\
+  public:                                                                                                                    \n\
+    size_t id;                                                                                                               \n\
+                                                                                                                             \n\
+    const char* name;                                                                                                        \n\
+                                                                                                                             \n\
+    virtual void construct(void* dest) =0;                                                                                   \n\
+                                                                                                                             \n\
+    virtual size_t get_object_size() =0;                                                                                     \n\
+                                                                                                                             \n\
+    bool is_constructed = false;                                                                                             \n\
+    void* internal_data = nullptr;                                                                                           \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+template <typename T>                                                                                                        \n\
+class async_ptr : public async_ptr_base {                                                                                    \n\
+                                                                                                                             \n\
+  public:                                                                                                                    \n\
+    async_ptr(const char* name) : async_ptr_base(name){}                                                                     \n\
+                                                                                                                             \n\
+    async_ptr() : async_ptr_base("null"){}                                                                                   \n\
+                                                                                                                             \n\
+    using value_type = T;                                                                                                    \n\
+                                                                                                                             \n\
+    async_ptr(async_ptr const&) = default;                                                                                   \n\
+                                                                                                                             \n\
+    async_ptr(async_ptr&&) = default;                                                                                        \n\
+                                                                                                                             \n\
+    async_ptr& operator=(async_ptr const&) = delete;                                                                         \n\
+    async_ptr& operator=(async_ptr&&) = delete;                                                                              \n\
+                                                                                                                             \n\
+    size_t get_object_size() override {                                                                                      \n\
+      return sizeof(T);                                                                                                      \n\
+    }                                                                                                                        \n\
+                                                                                                                             \n\
+    void construct(void* dest) override {                                                                                    \n\
+      is_constructed = true;                                                                                                 \n\
+      internal_data = dest;                                                                                                  \n\
+      new (dest) T();                                                                                                        \n\
+    }                                                                                                                        \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+template <typename T>                                                                                                        \n\
+struct is_async_ptr : std::false_type { };                                                                                   \n\
+                                                                                                                             \n\
+template <typename T>                                                                                                        \n\
+struct is_async_ptr<async_ptr<T>> : std::true_type { };                                                                      \n\
+                                                                                                                             \n\
+namespace detail {                                                                                                           \n\
+                                                                                                                             \n\
+struct Dependency {                                                                                                          \n\
+  Dependency(bool nm, size_t id_in, const char* theName) :                                                                   \n\
+    needs_modify(nm), id(id_in), name(theName)                                                                               \n\
+  {                                                                                                                          \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  Dependency(Dependency const&) = default;                                                                                   \n\
+  Dependency(Dependency&&) = default;                                                                                        \n\
+                                                                                                                             \n\
+  bool needs_modify;                                                                                                         \n\
+  const char* name;                                                                                                          \n\
+  size_t id;                                                                                                                 \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+typedef enum {                                                                                                               \n\
+  variadic_ctor_tag                                                                                                          \n\
+} variadic_ctor_tag_t;                                                                                                       \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+struct TaskBase {                                                                                                            \n\
+  std::vector<Dependency> dependencies;                                                                                      \n\
+  const char* name;                                                                                                          \n\
+  virtual void run() =0;                                                                                                     \n\
+ protected:                                                                                                                  \n\
+  TaskBase(const char* theName) : name(theName) {}                                                                           \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+template <typename FunctionObject, typename... ArgsCalledWith>                                                               \n\
+struct Task : TaskBase {                                                                                                     \n\
+                                                                                                                             \n\
+  template <typename T>                                                                                                      \n\
+  using value_type_identity = typename T::value_type;                                                                        \n\
+                                                                                                                             \n\
+  using args_tuple_t = std::tuple<std::remove_reference_t< ArgsCalledWith >...>;                                             \n\
+                                                                                                                             \n\
+  args_tuple_t args_;                                                                                                        \n\
+  FunctionObject func_;                                                                                                      \n\
+                                                                                                                             \n\
+  template <size_t N>                                                                                                        \n\
+  decltype(auto)                                                                                                             \n\
+  _get_call_arg_N() {                                                                                                        \n\
+    return _get_call_arg_N<N>(std::integral_constant<bool,                                                                   \n\
+      is_async_ptr<std::tuple_element_t<N, args_tuple_t>>::value                                                             \n\
+    >());                                                                                                                    \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  template <size_t N>                                                                                                        \n\
+  decltype(auto)                                                                                                             \n\
+  _get_call_arg_N(std::true_type) {                                                                                          \n\
+    using arg_n_val_t = typename std::tuple_element_t<N, args_tuple_t>::value_type;                                          \n\
+    return *static_cast<arg_n_val_t*>(get_dependency(                                                                        \n\
+      std::get<N>(args_).id                                                                                                  \n\
+    ));                                                                                                                      \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  template <size_t... Idxs>                                                                                                  \n\
+  void                                                                                                                       \n\
+  _populate_dependencies(                                                                                                    \n\
+    std::index_sequence<Idxs...>                                                                                             \n\
+  ) {                                                                                                                        \n\
+    std::make_tuple(_add_dependency<Idxs>(                                                                                   \n\
+      is_async_ptr<std::tuple_element_t<Idxs, args_tuple_t>>()                                                               \n\
+    )...);                                                                                                                   \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  template <size_t N>                                                                                                        \n\
+  int _add_dependency(std::true_type) {                                                                                      \n\
+    dependencies.emplace_back(                                                                                               \n\
+      callable_traits<FunctionObject>::template arg_n_is_nonconst_lvalue_reference<N>::value,                                \n\
+      std::get<N>(args_).id,                                                                                                 \n\
+      std::get<N>(args_).name                                                                                                \n\
+    );                                                                                                                       \n\
+    return 0;                                                                                                                \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  template <size_t>                                                                                                          \n\
+  int _add_dependency(std::false_type) { return 0; }                                                                         \n\
+                                                                                                                             \n\
+  template <size_t N>                                                                                                        \n\
+  decltype(auto)                                                                                                             \n\
+  _get_call_arg_N(std::false_type) {                                                                                         \n\
+    return std::move(std::get<N>(args_));                                                                                    \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  template <size_t... Idxs>                                                                                                  \n\
+  void _run(                                                                                                                 \n\
+    std::index_sequence<Idxs...>                                                                                             \n\
+  ) {                                                                                                                        \n\
+    func_(_get_call_arg_N<Idxs>()...);                                                                                       \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  // public-ish stuff                                                                                                        \n\
+                                                                                                                             \n\
+  template <typename... Args>                                                                                                \n\
+  Task(variadic_ctor_tag_t, const char* name, Args&&... args)                                                                \n\
+    : args_(std::forward<Args>(args)...), TaskBase(name)                                                                     \n\
+  {                                                                                                                          \n\
+    _populate_dependencies(                                                                                                  \n\
+      std::index_sequence_for<ArgsCalledWith...>()                                                                           \n\
+    );                                                                                                                       \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  template <typename... Args>                                                                                                \n\
+  Task(FunctionObject func, variadic_ctor_tag_t, const char* name, Args&&... args)                                           \n\
+    : args_(std::forward<Args>(args)...), TaskBase(name), func_(func)                                                        \n\
+  {                                                                                                                          \n\
+    _populate_dependencies(                                                                                                  \n\
+      std::index_sequence_for<ArgsCalledWith...>()                                                                           \n\
+    );                                                                                                                       \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  void run() override {                                                                                                      \n\
+    _run(std::index_sequence_for<ArgsCalledWith...>());                                                                      \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+} // end namespace detail                                                                                                    \n\
+                                                                                                                             \n\
+template <typename Functor, typename... Args>                                                                                \n\
+void make_task(const char* name, Args&&... args) {                                                                           \n\
+  register_task(detail::Task<Functor, Args...>(                                                                              \n\
+    detail::variadic_ctor_tag, name, std::forward<Args>(args)...                                                             \n\
+  ));                                                                                                                        \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+template <typename Function, typename... Args>                                                                               \n\
+void async(Function&& func, Args&&... args) {                                                             \n\
+  register_task(detail::Task<Function, Args...>(std::forward<Function>(func),                                                \n\
+        detail::variadic_ctor_tag, "<unnamed>", std::forward<Args>(args)...                                                             \n\
+  ));                                                                                                                        \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+                                                                                                                             \n\
+// backend                                                                                                                   \n\
+void* get_dependency(size_t id);                                                                                             \n\
+void register_task(detail::TaskBase&& task);                                                                                 \n\
+void init();                                                                                                                 \n\
+void finalize();                                                                                                             \n\
+                                                                                                                             \n\
+using detail::Dependency;                                                                                                    \n\
+using detail::TaskBase;                                                                                                      \n\
+                                                                                                                             \n\
+std::map<size_t, async_ptr_base*> id_to_ptr;                                                                                 \n\
+                                                                                                                             \n\
+struct Node {                                                                                                                \n\
+  typedef enum {                                                                                                             \n\
+    Task,                                                                                                                    \n\
+    Dependence,                                                                                                              \n\
+    AntiDependence                                                                                                           \n\
+  } node_type_t;                                                                                                             \n\
+                                                                                                                             \n\
+  Node(node_type_t ty, const char* theName, size_t theID) :                                                                  \n\
+    type(ty), name(theName), id(theID)                                                                                       \n\
+  { }                                                                                                                        \n\
+                                                                                                                             \n\
+  const char* name;                                                                                                          \n\
+  size_t id;                                                                                                                 \n\
+  bool visited = false;                                                                                                      \n\
+  node_type_t type;                                                                                                          \n\
+  std::set<Node*> listeners;                                                                                                 \n\
+                                                                                                                             \n\
+  virtual void run() {}                                                                                                      \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+struct RunnableNode : Node {                                                                                                 \n\
+  TaskBase&& runnable;                                                                                                       \n\
+                                                                                                                             \n\
+  RunnableNode(node_type_t ty, const char* theName, size_t theID, TaskBase&& runnable)                                       \n\
+    : Node(ty, theName, theID), runnable(std::move(runnable))                                                                \n\
+  { }                                                                                                                        \n\
+                                                                                                                             \n\
+  virtual void run() {                                                                                                       \n\
+    runnable.run();                                                                                                          \n\
+  }                                                                                                                          \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+struct DataUse {                                                                                                             \n\
+  Node* producer = nullptr;                                                                                                  \n\
+  Node* dataNode = nullptr;                                                                                                  \n\
+  std::list<Node*> readers;                                                                                                  \n\
+};                                                                                                                           \n\
+                                                                                                                             \n\
+static size_t next_task_id = 0;                                                                                              \n\
+static int next_task_color = 0;                                                                                              \n\
+                                                                                                                             \n\
+static std::list<Node*> task_roots;                                                                                          \n\
+static std::list<Node*> data_roots;                                                                                          \n\
+                                                                                                                             \n\
+static std::map<size_t, DataUse> data_uses;                                                                                  \n\
+static std::map<size_t, DataUse> task_uses;                                                                                  \n\
+                                                                                                                             \n\
+void*                                                                                                                        \n\
+get_dependency(size_t id){                                                                                                   \n\
+  assert(id_to_ptr.find(id) != id_to_ptr.end());                                                                             \n\
+  auto ptr = id_to_ptr[id];                                                                                                  \n\
+  if (not ptr->is_constructed) {                                                                                             \n\
+    ptr->construct(malloc(ptr->get_object_size()));                                                                          \n\
+  }                                                                                                                          \n\
+  return ptr->internal_data;                                                                                                 \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+static bool                                                                                                                  \n\
+register_task_dependence(const Dependency& dep, Node* newTask)                                                               \n\
+{                                                                                                                            \n\
+  DataUse& use = task_uses[dep.id];                                                                                          \n\
+  bool first = use.producer == nullptr;                                                                                      \n\
+  if (dep.needs_modify){                                                                                                     \n\
+    if (use.readers.empty()){                                                                                                \n\
+      //regular dependence                                                                                                   \n\
+      if (use.producer) //might be first task                                                                                \n\
+        use.producer->listeners.insert(newTask);                                                                             \n\
+    } else {                                                                                                                 \n\
+      //anti-dependence                                                                                                      \n\
+      for (Node* prev : use.readers){                                                                                        \n\
+        prev->listeners.insert(newTask);                                                                                     \n\
+      }                                                                                                                      \n\
+    }                                                                                                                        \n\
+    use.producer = newTask;                                                                                                  \n\
+  } else {                                                                                                                   \n\
+    //new reader                                                                                                             \n\
+    if (use.producer) //maybe reading garbage                                                                                \n\
+      use.producer->listeners.insert(newTask);                                                                               \n\
+    use.readers.push_back(newTask);                                                                                          \n\
+  }                                                                                                                          \n\
+  return first;                                                                                                              \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+void                                                                                                                         \n\
+register_data_flow_dependency(const Dependency& dep, Node* newTask)                                                          \n\
+{                                                                                                                            \n\
+  auto iter = data_uses.find(dep.id);                                                                                        \n\
+  if (iter == data_uses.end()){                                                                                              \n\
+    //create an initial data node                                                                                            \n\
+    Node* initialData = new Node(Node::Dependence, dep.name, next_task_id++);                                                \n\
+    data_roots.push_back(initialData);                                                                                       \n\
+    DataUse& newUse = data_uses[dep.id];                                                                                     \n\
+    newUse.dataNode = initialData;                                                                                           \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  DataUse& use = data_uses[dep.id];                                                                                          \n\
+  if (dep.needs_modify){                                                                                                     \n\
+    Node* newData = new Node(Node::Dependence, dep.name, next_task_id++);                                                    \n\
+    if (use.readers.empty()){                                                                                                \n\
+      use.dataNode->listeners.insert(newTask);                                                                               \n\
+    } else {                                                                                                                 \n\
+      Node* antiDep = new Node(Node::AntiDependence, dep.name, next_task_id++);                                              \n\
+      for (Node* reader : use.readers){                                                                                      \n\
+        reader->listeners.insert(antiDep);                                                                                   \n\
+      }                                                                                                                      \n\
+      antiDep->listeners.insert(newTask);                                                                                    \n\
+      use.readers.clear();                                                                                                   \n\
+    }                                                                                                                        \n\
+    newTask->listeners.insert(newData);                                                                                      \n\
+    use.producer = newTask;                                                                                                  \n\
+    use.dataNode = newData;                                                                                                  \n\
+  } else {                                                                                                                   \n\
+    use.dataNode->listeners.insert(newTask);                                                                                 \n\
+    use.readers.push_back(newTask);                                                                                          \n\
+  }                                                                                                                          \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+/**                                                                                                                          \n\
+ @return If the first task to use a dependency                                                                               \n\
+*/                                                                                                                           \n\
+static bool                                                                                                                  \n\
+register_dependence(const Dependency& dep, Node* newTask)                                                                    \n\
+{                                                                                                                            \n\
+  bool first = register_task_dependence(dep, newTask);                                                                       \n\
+  return first;                                                                                                              \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+void                                                                                                                         \n\
+register_task(detail::TaskBase&& task)                                                                                       \n\
+{                                                                                                                            \n\
+  RunnableNode* newTask = new RunnableNode(Node::Task, task.name, next_task_id++, std::move(task));                          \n\
+  Node* newDataFlowTask = new Node(Node::Task, newTask->runnable.name, next_task_id++);                                      \n\
+  bool root = true;                                                                                                          \n\
+  for (auto&& dep : newTask->runnable.dependencies){                                                                         \n\
+    register_data_flow_dependency(dep, newDataFlowTask);                                                                     \n\
+    bool first = register_task_dependence(dep, newTask);                                                                     \n\
+    root = root && first;                                                                                                    \n\
+  }                                                                                                                          \n\
+  if (root) task_roots.push_back(newTask);                                                                                   \n\
+                                                                                                                             \n\
+  newTask->run();                                                                                                            \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+void                                                                                                                         \n\
+init()                                                                                                                       \n\
+{                                                                                                                            \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+static void visit_execute(Node* node) {                                                                                      \n\
+  if (node->visited) {                                                                                                       \n\
+    assert(0);                                                                                                               \n\
+    return;                                                                                                                  \n\
+  }                                                                                                                          \n\
+                                                                                                                             \n\
+  node->visited = true;                                                                                                      \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+void executeGraph(std::list<Node*> const& roots) {                                                                           \n\
+  for (auto&& node : roots){                                                                                                 \n\
+    visit_execute(node);                                                                                                     \n\
+  }                                                                                                                          \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+void finalize() {                                                                                                            \n\
+  //executeGraph(task_roots);                                                                                                \n\
+}                                                                                                                            \n\
+                                                                                                                             \n\
+ } //end namespace mpass';
+//##############################################################################
+//##############################################################################
+//##############################################################################
+//##############################################################################
+// }}}1
+
+      var DEBUG = false;
+
+      // {{{1 Reveal.initialize()
+      // More info https://github.com/hakimel/reveal.js#configuration
+      Reveal.initialize({
+        history: true,
+
+        // More info https://github.com/hakimel/reveal.js#dependencies
+        dependencies: [
+          { src: 'plugin/markdown/marked.js' },
+          { src: 'plugin/markdown/markdown.js' },
+          { src: 'plugin/notes/notes.js', async: true },
+          { src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } }
+        ],
+        //,
+        width: 1080,
+        height: 820,
+        //height: '100%',
+        //margin: 0.1
+      });
+      // }}}1
+
+      function extractCode(data) {
+        var rv = data.replace(/<\/span>/g, '');
+        var rv = rv.replace(/&lt;/g, '<');
+        var rv = rv.replace(/&gt;/g, '>');
+        var rv = rv.replace(/<span.*?>/g, '');
+        var rv = rv.replace(/&amp;/g, '&');
+        return rv;
+      }
+
+      var compileButtonPosition = 'bottom: 0%; right: 0%; width: 20%;';
+      var editButtonPosition = 'top: 0%; right: 0%; width: 15%;';
+
+      function setupButtonStyle(button, positioning) {
+        button.setAttribute('style',
+          positioning
+          + 'height: 25pt;'
+          + 'font-size: 20pt;'
+          + 'display: block;'
+          + 'border-width: medium; border-color: #022548; border-style: outset; position: absolute;'
+          + 'background-color: rgba(128, 128, 128, 0.95);'
+          + 'color: #022548;'
+          + 'border-radius: 15pt; z-index: 10;'
+        );
+      }
+
+      function getVisibleSlide() {
+        return Reveal.getCurrentSlide();
+      }
+
+      function getOutputBlock() {
+        var presentSlide = getVisibleSlide();
+        if(DEBUG) { console.log("current slide", presentSlide); }
+        var codelist = presentSlide.getElementsByClassName("code-output-block");
+        if(DEBUG) { console.log(codelist); }
+        return codelist[0];
+      }
+      
+      function getCompileCodeList() {
+        var presentSlide = getVisibleSlide();
+        var codelist = presentSlide.getElementsByClassName("compile-cpp-code");
+        return codelist;
+      }
+
+
+      var code_prefix = ""
+      + "#include <iostream>\n"
+      + "#include <future>\n"
+      + "#include <cmath>\n"
+      + "#include <thread>\n"
+      + detection_header + "\n"
+      + "using namespace mpass;\n"
+      + "using namespace std;\n";
+
+
+      function doCompile() {
+        var outblock = getOutputBlock().childNodes[0];
+        outblock.style.display = 'none';
+        outblock.textContent = "Compiling...";
+        var trick = outblock.offsetHeight;
+        getOutputBlock().childNodes[0].style.display = 'block';
+        var compileButton = getVisibleSlide().getElementsByClassName("compile-button")[0];
+        compileButton.style.display = 'none'
+        compileButton.style.display = 'block'
+        compileButton.style['background-color'] = 'rgba(255,255,255, 0.8)';
+        var codelist = getCompileCodeList();
+        var code = "";
+        if(codelist.length == 0) {
+          code = getVisibleSlide().getElementsByClassName("activeEditorBlock")[0].value;
+        }
+        else {
+          code = extractCode(codelist[0].childNodes[0].innerHTML);
+        }
+        if(DEBUG) { console.log("Compiling...", code_prefix + code); }
+        var http = new XMLHttpRequest();
+        http.open("POST", "http://coliru.stacked-crooked.com/compile", false);
+        http.send(JSON.stringify({ "cmd": "clang++ -pthread -std=c++14 main.cpp && ./a.out", 
+          "src": code_prefix + code }
+        ));
+        getOutputBlock().childNodes[0].textContent = http.response;
+        setupButtonStyle(compileButton, compileButtonPosition);
+        compileButton.style.display = 'none'
+        compileButton.style.display = 'block'
+      }
+
+      function replaceWithCode() {
+        if(DEBUG) { console.log('inside replaceWithCode()'); }
+        var codearea = getVisibleSlide().getElementsByClassName('activeEditorBlock')[0];
+        var codeBlock = document.createElement('pre');
+        var codestuff = document.createElement('code');
+        if(DEBUG) { console.log(codearea.clientHeight); }
+        if(DEBUG) { console.log(codearea.offsetHeight); }
+        if(DEBUG) { console.log(codearea.clientWidth); }
+        if(DEBUG) { console.log(codearea.offsetWidth); }
+        codestuff.setAttribute('class', 'lang-c++ hljs cpp');
+        codeBlock.setAttribute('style', 'width: ' + (codearea.clientWidth).toString()
+            + 'px; height: ' + (codearea.clientHeight).toString() + 
+            'px; z-index: -10; margin: 20px auto; font-size: 0.55em;');
+        codestuff.textContent = codearea.value;
+        hljs.highlightBlock(codestuff);
+        codeBlock.appendChild(codestuff);
+        codeBlock = setupCodeBlock(codeBlock);
+        codearea.parentNode.replaceChild(codeBlock, codearea);
+        codeBlock = setupCodeBlock(codeBlock);
+        var editButton = getEditButton();
+        editButton.textContent = "Edit";
+        editButton.setAttribute('onclick', "replaceWithTextBox()");
+      }
+      
+      function getEditButton() {
+        return document.getElementById('edit-button');
+      }
+      
+      function replaceWithTextBox() {
+        if(DEBUG) { console.log('inside replaceWithTextBox()'); }
+        var codeBlock = document.getElementById('currentCodeBlock');
+        var codearea = document.createElement('textarea');
+        codearea.value = extractCode(codeBlock.firstChild.innerHTML);
+        if(DEBUG) { console.log(codeBlock.clientHeight); }
+        if(DEBUG) { console.log(codeBlock.offsetHeight); }
+        if(DEBUG) { console.log(codeBlock.clientWidth); }
+        if(DEBUG) { console.log(codeBlock.offsetWidth); }
+        codearea.setAttribute('style', 'width: ' + (codeBlock.firstChild.clientWidth - 10).toString()
+            + 'px; height: ' + (codeBlock.firstChild.clientHeight-10).toString() 
+            + 'px; z-index: -10; margin: 20px auto; font-size: 0.55em; padding: 5px;'
+            + 'display: block; line-height: 1.2em; font-family: monospace;'
+	        +  'box-shadow: 0px 0px 6px rgba(0,0,0,0.3); border: none;'
+        );
+        codearea.setAttribute('class', 'lang-c++ hljs cpp activeEditorBlock');
+        codearea.setAttribute('id', 'activeEditorBlock');
+        codeBlock.parentNode.replaceChild(codearea, codeBlock);
+        var editButton = getEditButton();
+        editButton.textContent = "Done";
+        editButton.setAttribute('onclick', "replaceWithCode()");
+      }
+
+      function setupCodeBlock( codeBlock ) {
+        codeBlock.setAttribute('id', 'currentCodeBlock');
+        codeBlock.setAttribute('class', 'compile-cpp-code');
+        return codeBlock;
+      }
+      
+      function getCodeBlock() {
+        var slide = getVisibleSlide();
+        if(slide) {
+          return slide.getElementsByClassName("compile-cpp-code");
+        }
+        else {
+          return [ ];
+        }
+      }
+
+
+      // {{{1 handleCompileCode() [sets up slides with compilable elements]
+      function handleCompileCode( event ) {
+        if(DEBUG) { console.log("compile-code event triggered", event); }
+        var codeBlock = getCodeBlock();
+        if(codeBlock.length > 0) {
+          if(codeBlock[0].parentElement.id != "surroundingDiv") {
+            codeBlock = codeBlock[0];
+            var slideContext = codeBlock.parentElement;
+            var surroundingDiv = document.createElement('div');
+            surroundingDiv.setAttribute('id', 'surroundingDiv');
+            slideContext.replaceChild(surroundingDiv, codeBlock);
+            surroundingDiv.appendChild(codeBlock);
+            codeBlock = setupCodeBlock(codeBlock);
+            surroundingDiv.style.clear = 'both';
+            surroundingDiv.style.height = 'auto';
+            surroundingDiv.style.overflow = 'auto';
+            surroundingDiv.style.position = 'relative';
+
+            getOutputBlock().firstChild.innerHTML = "\n";
+
+            // {{{2 compile button
+            var compileButton = document.createElement('div');
+            compileButton.textContent = "Compile & Run";
+            compileButton.setAttribute('id', 'compile-button');
+            setupButtonStyle(compileButton, compileButtonPosition);
+            compileButton.setAttribute('onclick', "doCompile()");
+            compileButton.setAttribute('class', 'compile-button');
+            surroundingDiv.appendChild(compileButton);
+            // }}}2
+
+            // {{{2 edit button
+            var editButton = document.createElement('div');
+            editButton.textContent = "Edit";
+            editButton.setAttribute('id', 'edit-button');
+            setupButtonStyle(editButton, editButtonPosition);
+            editButton.setAttribute('onclick', "replaceWithTextBox()");
+            surroundingDiv.appendChild(editButton);
+            // }}}2 edit button
+
+          }
+        }
+      }
+      // }}}1
+
+      Reveal.addEventListener( 'compile-code', handleCompileCode );
+
+      Reveal.addEventListener( 'slidechanged', function( event ) {
+        var datasetMap = getVisibleSlide().dataset;
+        var bgnode = event.target.getElementsByClassName("backgrounds")[0];
+        var existingTitle = bgnode.getElementsByClassName('title-block');
+        if(existingTitle.length > 0) {
+          bgnode.removeChild(existingTitle[0]);
+        }
+        if('title' in datasetMap) {
+          var titleBlock = document.createElement('div');
+          titleBlock.setAttribute('class', 'title-block');
+          titleBlock.setAttribute('style', 
+              'font-size: 4.5vh;'
+              + ' position: fixed;'
+              + ' top: 2.5%;'
+              + ' left: 1.5%;'
+          );
+          titleBlock.innerHTML = datasetMap.title;
+          event.target.getElementsByClassName("backgrounds")[0].appendChild(titleBlock);
+        }
+        if('state' in datasetMap) {
+          if(datasetMap.state == 'compile-code') handleCompileCode('');
+        }
+      });
+
+
+    </script>
+  </body>
+</html>
