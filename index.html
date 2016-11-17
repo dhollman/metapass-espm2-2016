@@ -187,8 +187,7 @@ namespace mpass {
 ```
 
 * All the heavy lifting is done by `async()` (and the backend runtime)
-* There is no underlying data in `async_ptr` to "accidentally" access
-            </script>
+* There is no underlying data in `async_ptr` to "accidentally" access </script>
           </section>
           <section data-markdown data-title="How do <code>async_ptr</code> and <code>async</code> work?">
             <script type="text/template">
@@ -1333,7 +1332,7 @@ void finalize() {                                                               
         }
         if(DEBUG) { console.log("Compiling...", code_prefix + code); }
         var http = new XMLHttpRequest();
-        http.open("POST", "http://coliru.stacked-crooked.com/compile", false);
+        http.open("POST", "http://coliru.stacked-crooked.com/compile", true);
         http.send(JSON.stringify({ "cmd": "clang++ -pthread -std=c++14 main.cpp && ./a.out", 
           "src": code_prefix + code }
         ));
