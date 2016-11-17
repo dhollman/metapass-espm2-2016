@@ -1332,7 +1332,7 @@ void finalize() {                                                               
         }
         if(DEBUG) { console.log("Compiling...", code_prefix + code); }
         var http = new XMLHttpRequest();
-        http.open("POST", "http://coliru.stacked-crooked.com/compile", true);
+        http.open("POST", "http://coliru.stacked-crooked.com/compile", false);
         http.send(JSON.stringify({ "cmd": "clang++ -pthread -std=c++14 main.cpp && ./a.out", 
           "src": code_prefix + code }
         ));
