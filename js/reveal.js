@@ -42,8 +42,8 @@
 			width: 960,
 			height: 700,
 
-            minTop: 0,
-            minBottom: 0,
+			minTop: 0,
+			minBottom: 0,
 
 
 			// Factor of the display size that should remain empty around the content
@@ -1669,10 +1669,7 @@
 						slide.style.top = 0;
 					}
 					else {
-						slide.style.top = Math.max(
-                                ( ( size.height - getAbsoluteHeight( slide ) - minTop - minBottom ) / 2 ) - slidePadding,
-                                  minTop
-                                ) + 'px';
+						slide.style.top = Math.max( ( ( size.height - getAbsoluteHeight( slide ) ) / 2 ) - slidePadding, 0) + 'px';
 					}
 				}
 				else {
